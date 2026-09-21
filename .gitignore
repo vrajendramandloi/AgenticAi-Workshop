@@ -1,0 +1,12 @@
+# Environment files (secrets & API keys)
+**/.env
+.env
+
+# Python bytecode and caches
+**/__pycache__/
+__pycache__/
+*.py[cod]
+
+# Google ADK local state
+**/.adk/
+.adk/

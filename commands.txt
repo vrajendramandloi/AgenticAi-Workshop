@@ -1,0 +1,5 @@
+#to create a single agent 
+python -m google.adk.cli create a1_single_agent
+
+# to Start the Web Server for the agent. 
+python -m google.adk.cli web .

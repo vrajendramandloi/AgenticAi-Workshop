@@ -13,9 +13,16 @@ except ImportError:
         TOOL_AGENT_INSTRUCTIONS,
     )
 
+from pathlib import Path
+
 try:
     from dotenv import load_dotenv, find_dotenv
-    load_dotenv(find_dotenv())
+    # Explicitly load root workspace .env (d:\WORK\WORKSPACE\AI\.env)
+    _root_env = Path(__file__).resolve().parent.parent / ".env"
+    if _root_env.exists():
+        load_dotenv(dotenv_path=_root_env)
+    else:
+        load_dotenv(find_dotenv())
     MODEL_NAME = os.environ.get("GOOGLE_GENAI_MODEL", "gemini-3.5-flash-lite")
     from init_tools.location_cache import location_cache
 except ImportError:

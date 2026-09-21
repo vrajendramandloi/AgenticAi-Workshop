@@ -13,10 +13,11 @@ Usage:
 import json
 import os
 import sys
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Union
 
 # Ensure pywin32 subpaths are available on Windows if installed in custom paths
 for _p in [Path(p) for p in sys.path if "PythonLibs" in p or "site-packages" in p]:
@@ -25,11 +26,15 @@ for _p in [Path(p) for p in sys.path if "PythonLibs" in p or "site-packages" in 
         if _target not in sys.path and (_p / _sub).exists():
             sys.path.append(_target)
 
-# Import location cache
+# Import location cache and underlying tools
 try:
     from init_tools.location_cache import location_cache
+    from init_tools import location_tool
+    from model.location_object import LocationObject
 except ImportError:
     from .init_tools.location_cache import location_cache
+    from .init_tools import location_tool
+    from .model.location_object import LocationObject
 
 # Initialize MCP Server (supports both MCP 2.x and FastMCP)
 try:
@@ -41,13 +46,56 @@ except ImportError:
 
 
 @server.tool()
-def get_current_location() -> Dict[str, Any]:
+def get_current_location() -> str:
     """Retrieve the user's current physical location (city, area, coordinates, country).
 
     Returns:
-        dict: Geographic information containing city, area, country, and coordinates.
+        str: Parsed, structured geographic information containing city, area, country, postal code, and coordinates.
     """
-    return location_cache.get_current_location()
+    # 1. Retrieve location data from LocationCache (runs once and is cached)
+    data = location_cache.get_current_location()
+
+    # 2. If the initial response hasn't acquired hardware location yet, wait and retry once
+    if not data or data.get("provider") != "Windows Hardware Location (Wi-Fi/GPS)":
+        for _ in range(3):
+            time.sleep(1.0)
+            raw = location_tool.get_current_location()
+            if raw.get("provider") == "Windows Hardware Location (Wi-Fi/GPS)":
+                location_cache._cached_location = LocationObject.from_json(raw)
+                data = location_cache.get_current_location()
+                break
+
+    # 3. Parse JSON / Dict response from LocationCache
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            data = {}
+    elif not isinstance(data, dict):
+        data = {}
+
+    area = data.get("area") or ""
+    city = data.get("city") or ""
+    state = data.get("state") or ""
+    postal_code = data.get("postal_code") or ""
+    country = data.get("country") or ""
+    lat = data.get("latitude") or ""
+    lon = data.get("longitude") or ""
+    formatted = data.get("formatted") or ""
+    provider = data.get("provider") or ""
+
+    # 4. Format parsed response cleanly for the agent and UI to avoid hallucinations
+    parsed_output = (
+        f"Area / Neighborhood: {area}\n"
+        f"City: {city}\n"
+        f"State: {state}\n"
+        f"Postal Code: {postal_code}\n"
+        f"Country: {country}\n"
+        f"Coordinates: {lat}, {lon}\n"
+        f"Formatted Address: {formatted}\n"
+        f"Provider: {provider}"
+    )
+    return parsed_output
 
 
 @server.tool()

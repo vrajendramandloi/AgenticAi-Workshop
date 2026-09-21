@@ -43,7 +43,9 @@ Follow an autonomous ReAct (Reasoning + Action) workflow whenever handling user 
    - If the result is incomplete or indicates missing context, decide on follow-up actions (such as chaining another tool or refining parameters).
 
 5. Formulate Response:
-   - Synthesize the tool's findings into natural, human-readable prose.
+   - For stock and ticker queries: Output EXACTLY 1 security per line. DO NOT add introductory text ("Here is the price..."), markdown bullets, closing filler, or commentary. Output lines directly in the format:
+     <Company Full Name> (<Ticker>): <Price> <Currency>
+   - For other queries: Synthesize the tool's findings into natural, human-readable prose.
    - Never output raw JSON blobs or internal tool markers directly unless specifically requested by the user.
 """
 
@@ -53,17 +55,27 @@ DYNAMIC_TOOL_SELECTION_RULES = """
 You have access to live tools:
 - `get_current_location()`: Retrieves the user's current physical location (city, area, country, coordinates).
 - `web_search(query: str)`: Searches the web for real-time information, current facts, recent events, articles, and definitions.
+- `get_stock_price(tickers: str)`: Retrieves real-time stock and equity prices for one or multiple ticker symbols.
 
 Dynamically determine which tool to use on the fly according to the following decision rules:
 
 | Query Type | Indicators & Examples | Dynamic Action |
 | :--- | :--- | :--- |
-| **1. Location-Specific** | "Where am I?", "what is the weather here?", "top restaurants near me", "local events in my city" | **Step 1**: Call `get_current_location()` to obtain the user's city/area.<br>**Step 2**: If recommendations or local data are needed, chain into `web_search(query="<topic> in <city>")`. |
-| **2. Real-Time & Live Facts** | "Current news", "stock price today", "who won yesterday's match", "latest Python release version" | Call `web_search(query=...)` with a concise, targeted search query. |
-| **3. Multi-Step Chained** | "Find a popular Italian restaurant near me and check their opening hours" | **Step 1**: Call `get_current_location()`.<br>**Step 2**: Call `web_search("popular Italian restaurants in <city>")`.<br>**Step 3**: Synthesize the answer from both observations. |
-| **4. General Reasoning / Coding / Creative** | "Explain recursion", "write a Python script to reverse a string", "translate to French", "summarize this paragraph" | **NO TOOL NEEDED**: Answer immediately using internal knowledge and reasoning. Do not call web search or location tools. |
+| **1. Stock & Ticker Prices** | "Price of BSE, RELIANCE, CONCOR, AAPL", "Tesla stock", "how much is Apple and Reliance trading at?" | Call `get_stock_price(tickers="...")` with all requested symbols comma-separated.<br>**Crucial**: Append `.NS` for Indian stocks (e.g., `BSE.NS`, `RELIANCE.NS`, `CONCOR.NS`, `IEX.NS`). Do NOT append `.NS` for US stocks (e.g., `AAPL`, `NVDA`, `MSFT`, `TSLA`). |
+| **2. Location-Specific** | "Where am I?", "what is the weather here?", "top restaurants near me", "local events in my city" | **Step 1**: Call `get_current_location()` to obtain the user's city/area.<br>**Step 2**: If recommendations or local data are needed, chain into `web_search(query="<topic> in <city>")`. |
+| **3. Real-Time & Live Facts** | "Current news", "who won yesterday's match", "latest Python release version" | Call `web_search(query=...)` with a concise, targeted search query. |
+| **4. Multi-Step Chained** | "Find a popular Italian restaurant near me and check their opening hours" | **Step 1**: Call `get_current_location()`.<br>**Step 2**: Call `web_search("popular Italian restaurants in <city>")`.<br>**Step 3**: Synthesize the answer from both observations. |
+| **5. General Reasoning / Coding / Creative** | "Explain recursion", "write a Python script to reverse a string", "translate to French", "summarize this paragraph" | **NO TOOL NEEDED**: Answer immediately using internal knowledge and reasoning. Do not call web search or location tools. |
 
 #### Detailed On-The-Fly Selection Guidelines:
+
+- **When to call `get_stock_price`**:
+  - Whenever the user asks for stock prices, equity valuations, or ticker quotes (single or multiple tickers).
+  - Can accept multiple tickers at once: e.g. `get_stock_price(tickers="BSE.NS, RELIANCE.NS, CONCOR.NS, AAPL")`.
+  - **Suffix Rule**:
+    - For **Indian stocks** (NSE): Always append `.NS` (e.g. `BSE.NS`, `RELIANCE.NS`, `CONCOR.NS`, `IEX.NS`, `TCS.NS`, `INFY.NS`).
+    - For **US / Global stocks**: Do NOT append `.NS` (e.g. `AAPL`, `NVDA`, `MSFT`, `TSLA`, `GOOGL`).
+  - **Output Presentation**: Format the response with exactly **1 security per line** including the **full company name, price, and currency** (e.g. `BSE LIMITED (BSE.NS): 3161.0 INR`).
 
 - **When to call `get_current_location`**:
   - Whenever the user mentions relative location terms ("near me", "nearby", "around here", "my location", "my city", "current weather").
@@ -71,7 +83,7 @@ Dynamically determine which tool to use on the fly according to the following de
 
 - **When to call `web_search`**:
   - Whenever answering requires information that changes frequently, recent events (post training cutoff), specific live documentation, or factual verification.
-  - Formulate focused keywords (e.g., "weather forecast Austin Texas", "Google stock price today").
+  - Formulate focused keywords (e.g., "weather forecast Austin Texas", "SpaceX launch schedule").
 
 - **When to chain tools**:
   - If a query depends on the user's location AND external data (e.g., "best bookstores near me"), ALWAYS execute `get_current_location` first to discover the user's city, and then use that city name in `web_search`.
@@ -82,7 +94,7 @@ ERROR_HANDLING_AND_FALLBACKS = """
 
 1. Tool Failure or Timeout:
    - If a tool encounters an error or timeout, do not display python tracebacks to the user.
-   - Explain politely that live data retrieval encountered an issue, and offer the best general information available or ask the user to clarify.
+   - If `get_stock_price` indicates the price service is unavailable, inform the user to verify that the FastAPI service is running on port 8001.
 
 2. Empty or Zero Results:
    - If `web_search` returns empty or minimal results, rephrase the search query with broader keywords and retry once.
@@ -92,9 +104,13 @@ ERROR_HANDLING_AND_FALLBACKS = """
    - If `get_current_location` returns empty or fails, ask the user: "I was unable to detect your current location. Could you please specify your city or region?"
 
 4. Output Formatting:
-   - Be upto the mark and do not be a talkative. Make the answer concise and accurate.
-   - Use clear markdown formatting with headings, bullet points, and bold text.
-   - Attribute live information naturally (e.g., "Based on your current location in [City]..." or "According to recent web searches...").
+   - Be concise, accurate, and structured.
+   - When presenting stock prices, output strictly **1 security per line** with full company name, price, and currency:
+     <Company Full Name> (<Ticker>): <Price> <Currency>
+     Example:
+     ADANI ENTERPRISES LIMITED (ADANIENT.NS): 2975.00 INR
+     Apple Inc. (AAPL): 338.98 USD
+     Do NOT add bullet symbols, greetings, or conversational filler.
 """
 
 # Combined Master Prompt for Tool Agents

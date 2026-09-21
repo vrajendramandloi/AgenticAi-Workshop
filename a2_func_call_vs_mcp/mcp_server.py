@@ -1,6 +1,6 @@
 """Model Context Protocol (MCP) Standalone Server
 ===============================================
-Hosts the live agent tools (location, web search)
+Hosts the live agent tools (location, web search, stock price)
 over the Model Context Protocol using JSON-RPC via stdio.
 
 Usage:
@@ -12,8 +12,10 @@ Usage:
 
 import json
 import os
+import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -118,6 +120,85 @@ def web_search(query: str) -> str:
         return f"Search error: {e}"
 
 
+@server.tool()
+def get_stock_price(tickers: str) -> str:
+    """Retrieve live stock prices for one or multiple tickers (e.g. BSE, RELIANCE, CONCOR, AAPL).
+
+    Calls the local FastAPI ticker service (http://127.0.0.1:8001/price/{ticker}).
+    Note:
+      - For Indian stocks (NSE), append '.NS' (e.g. 'CONCOR.NS', 'RELIANCE.NS', 'BSE.NS').
+      - For US / Global stocks, do not append '.NS' (e.g. 'AAPL', 'NVDA', 'MSFT').
+      - The tool also automatically checks '.NS' as fallback if an unsuffixed symbol is not found.
+
+    Args:
+        tickers: Comma-separated or space-separated list of ticker symbols (e.g. 'BSE, RELIANCE, CONCOR, AAPL' or 'AAPL').
+
+    Returns:
+        str: Live prices formatted with 1 security per line with full company name, price, and currency.
+    """
+    symbols = [s.strip().upper() for s in re.split(r'[,;\s]+', tickers) if s.strip()]
+    if not symbols:
+        return "No ticker symbols provided."
+
+    results = []
+    base_api_url = "http://127.0.0.1:8001/price"
+
+    for sym in symbols:
+        candidates = [sym]
+        # If no exchange suffix is provided, also queue .NS as fallback for Indian equities
+        if "." not in sym and "-" not in sym:
+            candidates.append(f"{sym}.NS")
+
+        found = False
+        last_error = ""
+
+        for cand in candidates:
+            url = f"{base_api_url}/{urllib.parse.quote(cand)}"
+            req = urllib.request.Request(url, headers={"User-Agent": "MCP-Agent/1.0"})
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    name = (data.get("name") or cand).strip()
+                    price = data.get("current_price")
+                    currency = (data.get("currency") or "USD").strip()
+                    ticker_code = (data.get("ticker") or cand).strip()
+                    
+                    if isinstance(price, (int, float)):
+                        formatted_price = f"{price:.2f}"
+                    else:
+                        formatted_price = str(price)
+
+                    results.append(f"{name} ({ticker_code}): {formatted_price} {currency}")
+                    found = True
+                    break
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    last_error = f"{sym}: Ticker not found"
+                    continue
+                last_error = f"{sym}: HTTP Error {e.code}"
+            except urllib.error.URLError:
+                last_error = f"{sym}: Service unavailable at {base_api_url} (Ensure FastAPI service is running on port 8001)"
+            except TimeoutError:
+                last_error = f"{sym}: Request timed out connecting to {base_api_url}"
+            except Exception as e:
+                last_error = f"{sym}: Error ({e})"
+
+        if not found:
+            results.append(last_error or f"{sym}: Price unavailable")
+
+    return "\n".join(results)
+
+
+
+
+
+
+
+
+
+
+
+
 if __name__ == "__main__":
     if "--list" in sys.argv:
         print("=== MCP Server: Registered Tools ===")
@@ -127,7 +208,7 @@ if __name__ == "__main__":
                 print(f"  Description: {tool.description.strip()}")
                 print(f"  Schema: {tool.parameters}\n")
         else:
-            print("Server initialized with tools: get_current_location, web_search")
+            print("Server initialized with tools: get_current_location, web_search, get_stock_price")
     else:
         # Run standard MCP server over stdio
         server.run(transport="stdio")

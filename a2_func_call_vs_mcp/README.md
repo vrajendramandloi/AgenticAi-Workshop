@@ -3,6 +3,7 @@
 This project demonstrates the core architectural differences between **Native Function Calling (In-Process)** and **Model Context Protocol (Client-Server)** using live tools:
 1. `get_current_location` (Hardware/IP Geolocation)
 2. `web_search` (DuckDuckGo search)
+3. `get_stock_price` (Live equity/stock prices via FastAPI service)
 
 ---
 
@@ -14,7 +15,7 @@ NATIVE FUNCTION CALLING (In-Process):
 │                  Python Process               │
 │  ┌────────────┐    direct in-memory pointer  │
 │  │ LLM Agent  │ ───────────────────────────> │ Python Functions
-│  └────────────┘                              │ (location, search)
+│  └────────────┘                              │ (location, search, stocks)
 └──────────────────────────────────────────────┘
 * High Coupling: Trapped in this single Python application.
 
@@ -25,6 +26,7 @@ MODEL CONTEXT PROTOCOL (MCP) (Client-Server):
 └────────────────────┘                         │ (mcp_server.py)                │
                                                │ - get_current_location         │
                                                │ - web_search                   │
+                                               │ - get_stock_price              │
                                                └────────────────────────────────┘
                                                                ▲
                                  Can also be plugged into ────┤
@@ -55,7 +57,9 @@ python mcp_server.py --list
 ```powershell
 python -m google.adk.cli web .
 ```
-Ask: *"Where am I and search for the latest news in my city"*
+Sample Prompts:
+- *"Where am I and search for the latest news in my city"*
+- *"What is the live price of BSE, RELIANCE, CONCOR, AAPL?"* (Queries live prices over MCP calling the FastAPI microservice)
 Notice the agent does not have any local tool functions in its memory—it communicates directly with `mcp_server.py` over stdio!
 
 ---

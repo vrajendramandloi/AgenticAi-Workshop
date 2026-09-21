@@ -5,7 +5,7 @@ Protocol (MCP).
 
 Architecture:
 - The Agent acts as an MCP Client.
-- The tools (location, web search) are hosted in an isolated,
+- The tools (location, web search, stock price) are hosted in an isolated,
   independent process (`mcp_server.py`).
 - The Agent connects over standard JSON-RPC (stdio) and discovers tools
   dynamically at runtime without importing them into memory.

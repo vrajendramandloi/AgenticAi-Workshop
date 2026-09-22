@@ -1,12 +1,27 @@
 # Environment files (secrets & API keys)
 **/.env
 .env
+.env.*
 
 # Python bytecode and caches
 **/__pycache__/
 __pycache__/
 *.py[cod]
+*$py.class
+*.pyc
 
-# Google ADK local state
+# Google ADK local state & logs
 **/.adk/
 .adk/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# IDE and Editor configurations
+.vscode/
+.idea/
+*.swp
+*.swo

@@ -2,5 +2,6 @@ google-adk>=2.9.1
 google-generativeai
 python-dotenv>=1.0.0
 litellm>=1.75.5
+yfinance>=0.2.36
 
 

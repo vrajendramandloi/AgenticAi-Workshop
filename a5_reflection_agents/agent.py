@@ -1,128 +1,136 @@
 import json
 import os
+import sys
 import urllib.parse
 import urllib.request
-from google.adk.agents import LoopAgent, LlmAgent, SequentialAgent
-from google.adk.tools.tool_context import ToolContext
-from google.adk.agents.callback_context import CallbackContext
-
-try:
-    from instructions import (
-        CRITIC_AGENT_INSTRUCTION,
-        COMPLETION_PHRASE,
-        STATE_CRITICISM,
-        STATE_CURRENT_DOC,
-        INITIAL_WRITER_AGENT_INSTRUCTIONS,
-        REFINE_AGENT_LOOP_INSTRUCTIONS,
-    )
-except ImportError:
-    from .instructions import (
-        CRITIC_AGENT_INSTRUCTION,
-        COMPLETION_PHRASE,
-        STATE_CRITICISM,
-        STATE_CURRENT_DOC,
-        INITIAL_WRITER_AGENT_INSTRUCTIONS,
-        REFINE_AGENT_LOOP_INSTRUCTIONS,
-    )
-
-
 from pathlib import Path
+
+# Prevent bytecode generation
+sys.dont_write_bytecode = True
+
+# Ensure workspace root and a5 root are in sys.path
+_current_dir = Path(__file__).resolve().parent
+_workspace_root = _current_dir.parent
+
+for _p in [str(_current_dir), str(_workspace_root)]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 try:
     from dotenv import load_dotenv, find_dotenv
-    # Explicitly load root workspace .env (d:\WORK\WORKSPACE\AI\.env)
-    _root_env = Path(__file__).resolve().parent.parent / ".env"
+    _root_env = _workspace_root / ".env"
     if _root_env.exists():
         load_dotenv(dotenv_path=_root_env)
     else:
         load_dotenv(find_dotenv())
-    MODEL_NAME = os.environ.get("GOOGLE_GENAI_MODEL", "gemini-3.5-flash-lite")
 except ImportError:
-    print("ERROR: Import Error while importing Model")
+    pass
 
-# --- State Keys ---
-STATE_CURRENT_DOC = "current_document"
-STATE_CRITICISM = "criticism"
-# Define the exact phrase the Critic should use to signal completion
-COMPLETION_PHRASE = "No major issues found."
+# Synchronize API keys across Google GenAI and ADK conventions
+if os.environ.get("GOOGLE_API_KEY") and not os.environ.get("GEMINI_API_KEY"):
+    os.environ["GEMINI_API_KEY"] = os.environ["GOOGLE_API_KEY"]
+if os.environ.get("GEMINI_API_KEY") and not os.environ.get("GOOGLE_API_KEY"):
+    os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]
 
-# --- Tool Definition ---
-def exit_loop(tool_context: ToolContext):
-    """Call this function ONLY when the critique indicates no further changes are needed, signaling the iterative process should end."""
-    print(f"  [Tool Call] exit_loop triggered by {tool_context.agent_name}")
-    tool_context.actions.escalate = True
-    tool_context.actions.skip_summarization = True
-    # Return empty dict as tools should typically return JSON-serializable output
-    return {}
+MODEL_NAME = os.environ.get("GOOGLE_GENAI_MODEL", "gemini-3.5-flash-lite")
 
-# --- Before Agent Callback ---
-def update_initial_topic_state(callback_context: CallbackContext):
-    """Ensure 'initial_topic' is set in state from the incoming user prompt."""
-    user_txt = ""
-    if getattr(callback_context, "user_content", None) and getattr(callback_context.user_content, "parts", None):
-        user_txt = " ".join([p.text for p in callback_context.user_content.parts if getattr(p, "text", None)]).strip()
-    
-    if user_txt:
-        callback_context.state['initial_topic'] = user_txt
-    elif 'initial_topic' not in callback_context.state:
-        callback_context.state['initial_topic'] = (
-            "Objective: Move 3 police and 3 criminals across a river using a 2-person boat without anyone escaping.\n"
-            "Conditions:\n"
-            "1. Criminal cannot be sent alone in boat (they will escape via river).\n"
-            "2. If criminals are left without any police on any shore they run away.\n"
-            "3. All 3 criminals should safely cross the river."
+from google.adk.agents.llm_agent import Agent
+
+try:
+    from instructions import TOOL_AGENT_INSTRUCTIONS
+except ImportError:
+    from .instructions import TOOL_AGENT_INSTRUCTIONS
+
+try:
+    from tools.init_tools.location_cache import location_cache
+except ImportError:
+    from .tools.init_tools.location_cache import location_cache
+
+try:
+    from subagents.phase1.quotation_agent import quotation_agent
+except ImportError:
+    from .subagents.phase1.quotation_agent import quotation_agent
+
+try:
+    from subagents.phase2 import (
+        statistic_agent,
+        luxury_research_agent,
+        value_research_agent,
+        phase2_parallel_agent,
+        eval_agent,
+    )
+except ImportError:
+    try:
+        from .subagents.phase2 import (
+            statistic_agent,
+            luxury_research_agent,
+            value_research_agent,
+            phase2_parallel_agent,
+            eval_agent,
         )
+    except ImportError:
+        statistic_agent = None
+        luxury_research_agent = None
+        value_research_agent = None
+        phase2_parallel_agent = None
+        eval_agent = None
 
-# --- Agent Definitions ---
+try:
+    from subagents.phase2_eval_proposal import proposal_agent
+except ImportError:
+    try:
+        from .subagents.phase2_eval_proposal import proposal_agent
+    except ImportError:
+        proposal_agent = None
 
-# STEP 1: Initial Solver Agent (Proposes initial structured plan)
-initial_writer_agent = LlmAgent(
-    name="InitialSolverAgent",
+try:
+    from subagents.phase3 import finalizer_agent
+except ImportError:
+    try:
+        from .subagents.phase3 import finalizer_agent
+    except ImportError:
+        finalizer_agent = None
+
+try:
+    from tools.web_search_tool import web_search
+except ImportError:
+    from .tools.web_search_tool import web_search
+
+
+# Root Boss Agent: Vicky
+if quotation_agent and getattr(quotation_agent, "parent_agent", None) is not None:
+    quotation_agent.parent_agent = None
+
+root_agent = Agent(
+    name="Vicky",
+    description=(
+        "Boss / Lead Orchestrator agent who leads a team of specialized subagents, "
+        "delegates tasks, and collaborates directly with Vrajendra."
+    ),
     model=MODEL_NAME,
-    include_contents='none',
-    instruction=INITIAL_WRITER_AGENT_INSTRUCTIONS,
-    description="Analyzes the problem objective and conditions to propose an initial step-by-step plan.",
-    output_key=STATE_CURRENT_DOC
+    tools=[web_search, location_cache.get_current_location],
+    instruction=TOOL_AGENT_INSTRUCTIONS,
+    sub_agents=[quotation_agent] if quotation_agent else [],
 )
 
-# STEP 2a: Critic Agent (Audits every move against user-defined conditions)
-critic_agent_in_loop = LlmAgent(
-    name="CriticAgent",
-    model=MODEL_NAME,
-    include_contents='none',
-    instruction=CRITIC_AGENT_INSTRUCTION,
-    description="Rigorously audits every single transition and state against all user conditions, rejecting invalid moves.",
-    output_key=STATE_CRITICISM
-)
+# Export aliases for multi-agent runners and test scripts
+vicky_agent = root_agent
+kuhu_agent = root_agent
+boss_agent = root_agent
+query_analysis_agent = quotation_agent
+phase1_agent = quotation_agent
+phase2_agent = eval_agent
+eval_agent = eval_agent
+ishaan_agent = eval_agent
+phase2_parallel_agent = phase2_parallel_agent
+statistic_agent = statistic_agent
+luxury_research_agent = luxury_research_agent
+value_research_agent = value_research_agent
+proposal_agent = proposal_agent
+tanvi_agent = proposal_agent
+phase3_agent = finalizer_agent
+finalizer_agent = finalizer_agent
+advik_agent = finalizer_agent
 
-# STEP 2b: Refiner Agent (Reconstructs plan, eliminates flaws, or triggers exit_loop)
-refiner_agent_in_loop = LlmAgent(
-    name="RefinerAgent",
-    model=MODEL_NAME,
-    include_contents='none',
-    instruction=REFINE_AGENT_LOOP_INSTRUCTIONS,
-    description="Refines the plan step-by-step based on the audit feedback, or calls exit_loop when approved.",
-    tools=[exit_loop],
-    output_key=STATE_CURRENT_DOC
-)
 
-# STEP 2: Refinement Loop Agent
-refinement_loop = LoopAgent(
-    name="RefinementLoop",
-    sub_agents=[
-        critic_agent_in_loop,
-        refiner_agent_in_loop,
-    ],
-    max_iterations=5
-)
 
-# STEP 3: Overall Sequential Pipeline
-root_agent = SequentialAgent(
-    name="ConstraintReflectionPipeline",
-    sub_agents=[
-        initial_writer_agent,
-        refinement_loop
-    ],
-    before_agent_callback=update_initial_topic_state,
-    description="Generalized Constraint Reflection Pipeline: Generates initial plan, audits every step against stated conditions, and refines until verified."
-)
